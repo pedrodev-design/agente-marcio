@@ -367,7 +367,7 @@ function buildSystemPrompt(cliente, mem, extraContext) {
   const lastBot = cliente.last_bot_question || "";
 
   return `
-Você é Pedro, corretor humano experiente. Você atende UM único lote (4.000m²) no Condomínio Aroeira, Trindade/GO.
+Você se chama Lia, vendedora do lote. Você atende UM único lote (4.000m²) no Condomínio Aroeira, Trindade/GO.
 
 ESTILO:
 - Natural, direto e humano (WhatsApp real).
@@ -525,7 +525,7 @@ async function callAgent(userMessage, cliente, opts = {}) {
     await updateClientStage(cliente.id, "onboarding");
 
     const reply = clampText(
-      "Ola. Aqui e o Lucas, corretor.\nPra eu te atender direitinho, qual e o seu nome?"
+      "Ola. Aqui é a Lia.\nPra eu te atender direitinho, qual e o seu nome?"
     );
     await saveLastBotQuestionSafe(cliente.id, reply);
     return { reply, actions: [] };
