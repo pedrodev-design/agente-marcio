@@ -1,6 +1,4 @@
 // whatsapp.js
-require("dotenv").config();
-
 const {
   default: makeWASocket,
   useMultiFileAuthState,
@@ -16,28 +14,21 @@ const path = require("path");
 const { textToWavFile } = require("./voice");
 const { transcribeAudio } = require("./stt");
 
-const API_URL = process.env.API_URL?.trim() || "http://localhost:3000/test-agent";
-
+// ========= PATH SAFETY =========
 function normPath(p) {
-  // Normaliza e padroniza para comparação (Windows é case-insensitive)
   return path.resolve(String(p || "")).replace(/\\+/g, "\\").toLowerCase();
 }
-
 function isSafePath(requestedPath, allowedDir) {
   const req = normPath(requestedPath);
   const base = normPath(allowedDir) + path.sep;
   return req.startsWith(base);
 }
 
-
-/**
- * Áudio só quando o cliente pedir (ex: "manda áudio", "explica em áudio", etc.)
- */
+// ========= AUDIO INTENT =========
 function clientAskedForAudio(text = "") {
   const t = String(text || "").trim().toLowerCase();
   if (!t) return false;
 
-  // expressões comuns
   const patterns = [
     /manda.*áudio/,
     /envia.*áudio/,
@@ -55,7 +46,13 @@ function clientAskedForAudio(text = "") {
   return patterns.some((re) => re.test(t));
 }
 
-async function startWhatsApp() {
+async function startWhatsApp(opts = {}) {
+  const API_URL =
+    String(opts.apiUrl || "").trim() ||
+    process.env.API_URL?.trim() ||
+    "http://127.0.0.1:3000/test-agent";
+
+  // ⚠️ No Render free, filesystem pode não persistir entre deploy/sleep
   const { state, saveCreds } = await useMultiFileAuthState("auth_info");
 
   const sock = makeWASocket({ auth: state });
@@ -77,7 +74,7 @@ async function startWhatsApp() {
 
       console.log("⚠️ Conexão fechada. statusCode:", statusCode);
 
-      if (shouldReconnect) startWhatsApp();
+      if (shouldReconnect) startWhatsApp({ apiUrl: API_URL });
       else console.log("🔒 Deslogado. Apague auth_info e conecte novamente.");
     }
 
@@ -97,7 +94,7 @@ async function startWhatsApp() {
     // Bloqueia grupos e broadcast
     if (from.endsWith("@g.us") || from === "status@broadcast") return;
 
-    // 1) Texto (normal)
+    // 1) Texto normal
     let text =
       msg.message.conversation ||
       msg.message.extendedTextMessage?.text ||
@@ -144,6 +141,7 @@ async function startWhatsApp() {
 
       const reply = response?.data?.reply;
       const actions = Array.isArray(response?.data?.actions) ? response.data.actions : [];
+
       if (!reply) {
         console.error("⚠️ API respondeu sem 'reply':", response?.data);
         return;
@@ -162,7 +160,7 @@ async function startWhatsApp() {
           await sock.sendMessage(from, {
             audio: audioBuffer,
             mimetype: "audio/wav",
-            ptt: false, // áudio normal
+            ptt: false,
           });
 
           console.log("🔊 Áudio enviado (cliente pediu):", audioPath);
@@ -170,64 +168,51 @@ async function startWhatsApp() {
           console.error("⚠️ Falha no TTS, enviando texto. Motivo:", e?.message || e);
           await sock.sendMessage(from, { text: reply });
         } finally {
-          // limpa o arquivo pra não acumular
           if (audioPath) {
-            try {
-              fs.unlinkSync(audioPath);
-            } catch (_) {}
+            try { fs.unlinkSync(audioPath); } catch (_) {}
           }
         }
-
       } else {
-        // padrão: texto
         await sock.sendMessage(from, { text: reply });
       }
 
-      // 2) Processa ações do agente (ex: enviar PDFs)
+      // 3) Ações do agente (PDFs, imagens, vídeos)
       for (const action of actions) {
         try {
           if (!action || typeof action !== "object") continue;
 
-          // ========== IMAGENS ==========
           if (action.type === "send_image") {
             const imagesDir = path.resolve(__dirname, "assets", "images");
             const requestedPath = path.resolve(String(action.path || ""));
             if (!isSafePath(requestedPath, imagesDir)) {
-              console.error("⛔ Caminho de imagem fora de /assets/images. Bloqueado:", requestedPath);
+              console.error("⛔ Imagem fora de /assets/images. Bloqueado:", requestedPath);
               continue;
             }
-
             if (!fs.existsSync(requestedPath)) {
               console.error("⚠️ Imagem não encontrada:", requestedPath);
               continue;
             }
-
             const fileBuffer = fs.readFileSync(requestedPath);
             const caption = action.caption ? String(action.caption) : undefined;
-
             await sock.sendMessage(from, { image: fileBuffer, caption });
             console.log("🖼️ Imagem enviada:", path.basename(requestedPath));
             continue;
           }
 
-          // ========== VÍDEOS ==========
           if (action.type === "send_video") {
             const videosDir = path.resolve(__dirname, "assets", "videos");
             const requestedPath = path.resolve(String(action.path || ""));
             if (!isSafePath(requestedPath, videosDir)) {
-              console.error("⛔ Caminho de vídeo fora de /assets/videos. Bloqueado:", requestedPath);
+              console.error("⛔ Vídeo fora de /assets/videos. Bloqueado:", requestedPath);
               continue;
             }
-
             if (!fs.existsSync(requestedPath)) {
               console.error("⚠️ Vídeo não encontrado:", requestedPath);
               continue;
             }
-
             const fileBuffer = fs.readFileSync(requestedPath);
             const caption = action.caption ? String(action.caption) : undefined;
             const mimetype = action.mimetype ? String(action.mimetype) : "video/mp4";
-
             await sock.sendMessage(from, { video: fileBuffer, mimetype, caption });
             console.log("🎬 Vídeo enviado:", path.basename(requestedPath));
             continue;
@@ -237,15 +222,13 @@ async function startWhatsApp() {
             const docsDir = path.resolve(__dirname, "documents");
             const requestedPath = path.resolve(String(action.path || ""));
             if (!isSafePath(requestedPath, docsDir)) {
-              console.error("⛔ Caminho de documento fora de /documents. Bloqueado:", requestedPath);
+              console.error("⛔ Documento fora de /documents. Bloqueado:", requestedPath);
               continue;
             }
-
             if (!fs.existsSync(requestedPath)) {
               console.error("⚠️ Documento não encontrado:", requestedPath);
               continue;
             }
-
             const fileBuffer = fs.readFileSync(requestedPath);
             const fileName = String(action.filename || path.basename(requestedPath));
             const caption = action.caption ? String(action.caption) : undefined;
@@ -271,6 +254,8 @@ async function startWhatsApp() {
       }
     }
   });
+
+  return sock;
 }
 
-startWhatsApp();
+module.exports = startWhatsApp;
