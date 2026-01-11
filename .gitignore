@@ -1,0 +1,6 @@
+.env
+auth_info/
+node_modules/
+*.log
+tmp/
+dist/
